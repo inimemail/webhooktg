@@ -461,7 +461,7 @@ select_bot_id() {
     fi
     list_bots
     while true; do
-        read_required "请选择机器人序号" seq
+        seq="$(read_required "请选择机器人序号")"
         [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; continue; }
         selected_id="$(get_id_by_seq "${BOTS_DB}" "${seq}")" || { warn "没有这个序号。"; continue; }
         printf -v "${var_name}" '%s' "${selected_id}"
@@ -479,7 +479,7 @@ select_notifier_id() {
     fi
     list_notifiers
     while true; do
-        read_required "请选择通知位序号" seq
+        seq="$(read_required "请选择通知位序号")"
         [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; continue; }
         selected_id="$(get_id_by_seq "${NOTIFIERS_DB}" "${seq}")" || { warn "没有这个序号。"; continue; }
         printf -v "${var_name}" '%s' "${selected_id}"
@@ -509,7 +509,7 @@ edit_bot() {
     [[ -s "${BOTS_DB}" ]] || { warn "没有可修改的机器人。"; return 0; }
     list_bots
     local seq wanted_id tmp id name token enabled created new_name new_token new_enabled
-    read_required "请输入要修改的机器人序号" seq
+    seq="$(read_required "请输入要修改的机器人序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${BOTS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     tmp="$(mktemp)"
@@ -536,7 +536,7 @@ delete_bot() {
     [[ -s "${BOTS_DB}" ]] || { warn "没有可删除的机器人。"; return 0; }
     list_bots
     local seq wanted_id tmp id name token enabled created removed="no" notifier_tmp
-    read_required "请输入要删除的机器人序号" seq
+    seq="$(read_required "请输入要删除的机器人序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${BOTS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     if ! confirm "删除机器人会连带删除它下面的通知位，继续吗"; then
@@ -569,7 +569,7 @@ toggle_bot() {
     [[ -s "${BOTS_DB}" ]] || { warn "没有可切换的机器人。"; return 0; }
     list_bots
     local seq wanted_id tmp id name token enabled created new_enabled
-    read_required "请输入要切换状态的机器人序号" seq
+    seq="$(read_required "请输入要切换状态的机器人序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${BOTS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     tmp="$(mktemp)"
@@ -591,7 +591,7 @@ test_bot() {
     [[ -s "${BOTS_DB}" ]] || { warn "没有可测试的机器人。"; return 0; }
     list_bots
     local seq wanted_id token resp
-    read_required "请输入要测试的机器人序号" seq
+    seq="$(read_required "请输入要测试的机器人序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${BOTS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     token="$(bot_token_by_id "${wanted_id}")" || { warn "获取 token 失败。"; return 1; }
@@ -639,7 +639,7 @@ edit_notifier() {
     [[ -s "${NOTIFIERS_DB}" ]] || { warn "没有可修改的通知位。"; return 0; }
     list_notifiers
     local seq wanted_id tmp id name bot_id chat_id type enabled created new_name new_bot_id new_chat_id new_type_choice new_type new_enabled
-    read_required "请输入要修改的通知位序号" seq
+    seq="$(read_required "请输入要修改的通知位序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${NOTIFIERS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     tmp="$(mktemp)"
@@ -686,7 +686,7 @@ delete_notifier() {
     [[ -s "${NOTIFIERS_DB}" ]] || { warn "没有可删除的通知位。"; return 0; }
     list_notifiers
     local seq wanted_id tmp id name bot_id chat_id type enabled created removed="no"
-    read_required "请输入要删除的通知位序号" seq
+    seq="$(read_required "请输入要删除的通知位序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${NOTIFIERS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     tmp="$(mktemp)"
@@ -707,7 +707,7 @@ toggle_notifier() {
     [[ -s "${NOTIFIERS_DB}" ]] || { warn "没有可切换的通知位。"; return 0; }
     list_notifiers
     local seq wanted_id tmp id name bot_id chat_id type enabled created new_enabled
-    read_required "请输入要切换状态的通知位序号" seq
+    seq="$(read_required "请输入要切换状态的通知位序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${NOTIFIERS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     tmp="$(mktemp)"
@@ -729,7 +729,7 @@ test_notifier() {
     [[ -s "${NOTIFIERS_DB}" ]] || { warn "没有可测试的通知位。"; return 0; }
     list_notifiers
     local seq wanted_id id name bot_id chat_id type enabled created token text resp
-    read_required "请输入要测试的通知位序号" seq
+    seq="$(read_required "请输入要测试的通知位序号")"
     [[ "${seq}" =~ ^[0-9]+$ ]] || { warn "请输入数字。"; return 1; }
     wanted_id="$(get_id_by_seq "${NOTIFIERS_DB}" "${seq}")" || { warn "没有这个序号。"; return 1; }
     while IFS=$'\t' read -r id name bot_id chat_id type enabled created; do

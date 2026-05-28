@@ -14,6 +14,7 @@ INDEX_FILE="${APP_DIR}/index.js"
 RUNTIME_FLAG="${BASE_DIR}/.installed"
 DEFAULT_PORT="3000"
 DEFAULT_UPDATE_URL=""
+DEFAULT_INSTALL_URL="https://raw.githubusercontent.com/inimemail/webhooktg/main/install.sh"
 
 red() { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -130,6 +131,7 @@ load_settings() {
     SECRET_KEY=""
     PORT="${DEFAULT_PORT}"
     UPDATE_URL="${DEFAULT_UPDATE_URL}"
+    INSTALL_URL="${DEFAULT_INSTALL_URL}"
     WORK_DIR="${BASE_DIR}"
     if [[ -f "${SETTINGS_FILE}" ]]; then
         # shellcheck disable=SC1090
@@ -138,6 +140,7 @@ load_settings() {
     SECRET_KEY="${SECRET_KEY:-}"
     PORT="${PORT:-${DEFAULT_PORT}}"
     UPDATE_URL="${UPDATE_URL:-${DEFAULT_UPDATE_URL}}"
+    INSTALL_URL="${INSTALL_URL:-${DEFAULT_INSTALL_URL}}"
     WORK_DIR="${WORK_DIR:-${BASE_DIR}}"
 }
 
@@ -147,8 +150,37 @@ save_settings() {
         printf "SECRET_KEY='%s'\n" "$(escape_sq "${SECRET_KEY}")"
         printf "PORT='%s'\n" "$(escape_sq "${PORT}")"
         printf "UPDATE_URL='%s'\n" "$(escape_sq "${UPDATE_URL}")"
+        printf "INSTALL_URL='%s'\n" "$(escape_sq "${INSTALL_URL}")"
         printf "WORK_DIR='%s'\n" "$(escape_sq "${WORK_DIR}")"
     } > "${SETTINGS_FILE}"
+}
+
+detect_server_ip() {
+    local candidate=""
+    if [[ -n "${TG_NOTIFY_PUBLIC_IP:-}" ]]; then
+        printf '%s\n' "${TG_NOTIFY_PUBLIC_IP}"
+        return 0
+    fi
+
+    if command -v hostname >/dev/null 2>&1; then
+        candidate="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^(127\.|0\.0\.0\.0$|::1$)' | head -n 1 || true)"
+        [[ -n "${candidate}" ]] && { printf '%s\n' "${candidate}"; return 0; }
+    fi
+
+    if command -v ip >/dev/null 2>&1; then
+        candidate="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}' || true)"
+        [[ -n "${candidate}" ]] && { printf '%s\n' "${candidate}"; return 0; }
+        candidate="$(ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | grep -Ev '^(127\.|0\.0\.0\.0$)' | head -n 1 || true)"
+        [[ -n "${candidate}" ]] && { printf '%s\n' "${candidate}"; return 0; }
+    fi
+
+    printf '127.0.0.1\n'
+}
+
+service_base_url() {
+    local ip
+    ip="$(detect_server_ip)"
+    printf 'http://%s:%s' "${ip}" "${PORT}"
 }
 
 service_running() {
@@ -204,6 +236,50 @@ function rowsFromFile(file, expectedColumns) {
   });
 }
 
+function getPath(obj, path) {
+  return path.split('.').reduce((current, key) => {
+    if (current === null || current === undefined) return undefined;
+    return current[key];
+  }, obj);
+}
+
+function firstValue(obj, paths) {
+  for (const item of paths) {
+    const value = getPath(obj, item);
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+  return '';
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function prettyValue(value, fallback = '-') {
+  if (value === undefined || value === null || String(value).trim() === '') return fallback;
+  return String(value);
+}
+
+function formatAmount(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return '-';
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    return num.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  }
+  return String(value);
+}
+
+function pickOrderId(payload) {
+  return firstValue(payload, ['order_no', 'order_sn', 'trade_no', 'out_trade_no', 'order_id', 'id']);
+}
+
 function loadBots() {
   return rowsFromFile(path.join(dataDir, 'bots.tsv'), 5).map(([id, name, token, enabled, created]) => ({
     id, name, token, enabled: enabled || 'yes', created
@@ -256,21 +332,66 @@ function enabledRecipients(settings) {
 }
 
 function buildMessage(payload) {
-  const event = payload.event_type || payload.type || payload.event || '状态更新';
-  return [
-    'API 通知',
-    `事件: ${event}`,
-    `时间: ${new Date().toISOString()}`,
-    '详情:',
-    JSON.stringify(payload, null, 2)
-  ].join('\n');
+  const siteName = firstValue(payload, ['site_name', 'shop_name', 'app_name', 'system_name']) || '异次元发卡';
+  const productName = firstValue(payload, ['product_name', 'goods_name', 'product_title', 'title', 'name', 'item_name']) || '商品购买通知';
+  const orderNo = firstValue(payload, ['order_no', 'order_sn', 'trade_no', 'out_trade_no', 'order_id', 'id']);
+  const status = firstValue(payload, ['pay_status', 'order_status', 'status', 'state']) || '已触发';
+  const amount = firstValue(payload, ['pay_amount', 'total_amount', 'money', 'amount', 'price', 'total']);
+  const payType = firstValue(payload, ['payment_method', 'pay_type', 'channel', 'payment', 'pay_channel']);
+  const buyer = firstValue(payload, ['buyer', 'username', 'nickname', 'user_name', 'buyer_name', 'account']);
+  const contact = [
+    firstValue(payload, ['email']),
+    firstValue(payload, ['phone']),
+    firstValue(payload, ['mobile']),
+    firstValue(payload, ['qq'])
+  ].filter((item) => item && String(item).trim() !== '');
+  const createTime = firstValue(payload, ['create_time', 'created_at', 'order_time', 'add_time', 'time']);
+  const payTime = firstValue(payload, ['pay_time', 'paid_at', 'notify_time', 'success_time']);
+  const notifyType = firstValue(payload, ['event_type', 'type', 'event']) || '商品购买';
+  const note = firstValue(payload, ['remark', 'memo', 'note', 'message']);
+  const orderUrl = firstValue(payload, ['order_url', 'url', 'detail_url']);
+  const amountText = formatAmount(amount);
+  const rawJson = JSON.stringify(payload, null, 2);
+  const rawBlock = rawJson.length > 1200 ? `${rawJson.slice(0, 1200)}\n...` : rawJson;
+
+  const lines = [
+    `<b>${escapeHtml(siteName)} · ${escapeHtml(productName)}</b>`,
+    `<b>通知类型：</b>${escapeHtml(notifyType)}`,
+    `<b>订单状态：</b>${escapeHtml(status)}`,
+    `<b>订单编号：</b><code>${escapeHtml(orderNo || '-')}</code>`,
+    `<b>支付金额：</b>${escapeHtml(amountText)}`,
+    `<b>支付方式：</b>${escapeHtml(payType || '-')}`,
+    `<b>买家信息：</b>${escapeHtml(prettyValue(buyer))}`,
+    `<b>联系方式：</b>${escapeHtml(contact.length ? contact.join(' / ') : '-')}`,
+    `<b>下单时间：</b>${escapeHtml(prettyValue(createTime))}`,
+    `<b>支付时间：</b>${escapeHtml(prettyValue(payTime))}`
+  ];
+
+  if (orderUrl) {
+    lines.push(`<b>订单链接：</b><code>${escapeHtml(orderUrl)}</code>`);
+  }
+  if (note) {
+    lines.push(`<b>备注：</b>${escapeHtml(note)}`);
+  }
+
+  lines.push('');
+  lines.push('<b>原始数据</b>');
+  lines.push(`<pre>${escapeHtml(rawBlock)}</pre>`);
+  return lines.join('\n');
+}
+
+function buildNotifyHeader(payload) {
+  const siteName = firstValue(payload, ['site_name', 'shop_name', 'app_name', 'system_name']) || '异次元发卡';
+  const productName = firstValue(payload, ['product_name', 'goods_name', 'product_title', 'title', 'name', 'item_name']) || '商品购买通知';
+  const orderId = pickOrderId(payload);
+  return orderId ? `${siteName} · ${productName} · 订单 ${orderId}` : `${siteName} · ${productName}`;
 }
 
 async function sendTelegram(botToken, chatId, text) {
   const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text })
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
   });
   if (!response.ok) {
     throw new Error(`Telegram API ${response.status}`);
@@ -306,7 +427,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && url.pathname === '/webhook/notify') {
+    if (req.method === 'POST' && url.pathname === '/webhook/notify') {
     try {
       const rawBody = await readBody(req);
       const payload = rawBody ? JSON.parse(rawBody) : {};
@@ -330,10 +451,11 @@ const server = http.createServer(async (req, res) => {
       }
 
       const text = buildMessage(payload);
+      const header = buildNotifyHeader(payload);
       let sent = 0;
       let failed = 0;
       await Promise.allSettled(recipients.map(async (item) => {
-        await sendTelegram(item.botToken, item.chatId, text);
+        await sendTelegram(item.botToken, item.chatId, `${header}\n\n${text}`);
         sent += 1;
       })).then((results) => {
         for (const result of results) {
@@ -758,6 +880,7 @@ edit_settings() {
     SECRET_KEY="$(read_default "通信密钥 SECRET_KEY" "${SECRET_KEY:-secret-$(date +%s)}")"
     PORT="$(read_default "端口" "${PORT}")"
     UPDATE_URL="$(read_default "更新地址(可留空)" "${UPDATE_URL}")"
+    INSTALL_URL="$(read_default "更新脚本地址" "${INSTALL_URL:-$DEFAULT_INSTALL_URL}")"
     WORK_DIR="$(read_default "工作目录(仅显示用)" "${WORK_DIR}")"
     save_settings
     ok "全局配置已保存。"
@@ -779,11 +902,11 @@ show_status() {
     printf '配置目录: %s\n' "${BASE_DIR}"
     printf '工作目录: %s\n' "${WORK_DIR}"
     printf '端口: %s\n' "${PORT}"
-    printf '机器人数量: %s\n' "${bots}"
-    printf '通知位数量: %s\n' "${notifiers}"
-    printf '容器状态: %s\n' "${container_status}"
-    printf 'Webhook: http://<你的服务器IP>:%s/webhook/notify\n' "${PORT}"
-    printf '健康检查: http://<你的服务器IP>:%s/health\n' "${PORT}"
+  printf '机器人数量: %s\n' "${bots}"
+  printf '通知位数量: %s\n' "${notifiers}"
+  printf '容器状态: %s\n' "${container_status}"
+  printf 'Webhook: %s/webhook/notify\n' "$(service_base_url)"
+  printf '健康检查: %s/health\n' "$(service_base_url)"
 }
 
 bootstrap_defaults() {
@@ -824,13 +947,54 @@ do_stop() {
 
 do_update() {
     load_settings
+    local tmp_dir backup_dir installer_url
+    installer_url="${INSTALL_URL:-${DEFAULT_INSTALL_URL}}"
+    tmp_dir="$(mktemp -d)"
+    backup_dir="${tmp_dir}/backup"
+    mkdir -p "${backup_dir}"
+
+    cp -f "${SETTINGS_FILE}" "${backup_dir}/settings.env" 2>/dev/null || true
+    cp -f "${BOTS_DB}" "${backup_dir}/bots.tsv" 2>/dev/null || true
+    cp -f "${NOTIFIERS_DB}" "${backup_dir}/notifiers.tsv" 2>/dev/null || true
+
+    info "正在下载更新脚本: ${installer_url}"
+    if ! command -v curl >/dev/null 2>&1; then
+        err "系统没有 curl，无法更新。"
+        rm -rf "${tmp_dir}"
+        return 1
+    fi
+
+    if ! curl -fsSL "${installer_url}" -o "${tmp_dir}/install.sh"; then
+        err "更新脚本下载失败。"
+        rm -rf "${tmp_dir}"
+        return 1
+    fi
+
+    if [[ ! -s "${tmp_dir}/install.sh" ]]; then
+        err "下载到的脚本为空。"
+        rm -rf "${tmp_dir}"
+        return 1
+    fi
+
+    chmod +x "${tmp_dir}/install.sh" 2>/dev/null || true
+    info "正在执行更新脚本。"
+    if ! bash "${tmp_dir}/install.sh"; then
+        err "远程安装脚本执行失败。"
+        rm -rf "${tmp_dir}"
+        return 1
+    fi
+
+    ensure_base
+    cp -f "${backup_dir}/settings.env" "${SETTINGS_FILE}" 2>/dev/null || true
+    cp -f "${backup_dir}/bots.tsv" "${BOTS_DB}" 2>/dev/null || true
+    cp -f "${backup_dir}/notifiers.tsv" "${NOTIFIERS_DB}" 2>/dev/null || true
+
     write_runtime
     if [[ -f "${COMPOSE_FILE}" ]]; then
         compose_restart
-    else
-        compose_up
     fi
-    ok "运行文件已更新。"
+    rm -rf "${tmp_dir}"
+    ok "已完成更新，配置已保留。"
 }
 
 show_logs() {

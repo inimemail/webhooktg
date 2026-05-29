@@ -1273,7 +1273,7 @@ main_menu() {
     while true; do
         echo
         echo "========== ${APP_NAME} =========="
-        echo "1. 初始化/安装"
+        echo "1. 初始化/安装1"
         echo "2. 机器人管理"
         echo "3. 通知位管理"
         echo "4. 修改全局配置"

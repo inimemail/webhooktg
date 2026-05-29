@@ -462,20 +462,20 @@ function buildMessage(payload) {
   const payTimeText = formatTimeValue(payTime);
 
   const lines = [
-    `<b>${escapeHtml(productName)}</b>`,
-    `<b>通知类型：</b>${escapeHtml(notifyType)}`,
-    `<b>订单状态：</b>${escapeHtml(status)}`,
-    `<b>订单编号：</b><code>${escapeHtml(orderNo || '-')}</code>`,
-    `<b>支付金额：</b>${escapeHtml(amountText)}`,
-    `<b>支付方式：</b>${escapeHtml(payType || '-')}`,
-    `<b>买家信息：</b>${escapeHtml(prettyValue(buyer))}`,
-    `<b>联系方式：</b>${escapeHtml(contact.length ? contact.join(' / ') : '-')}`,
-    `<b>下单时间：</b>${escapeHtml(createTimeText)}`,
-    `<b>支付时间：</b>${escapeHtml(payTimeText)}`
+    `ℹ️ <b>购买名称：</b><b>${escapeHtml(productName)}</b>`,
+    `🧾 <b>通知类型：</b>${escapeHtml(notifyType)}`,
+    `📌 <b>订单状态：</b>${escapeHtml(status)}`,
+    `🔢 <b>订单编号：</b><code>${escapeHtml(orderNo || '-')}</code>`,
+    `💰 <b>支付金额：</b><b>${escapeHtml(amountText)}</b>`,
+    `💳 <b>支付方式：</b>${escapeHtml(payType || '-')}`,
+    `👤 <b>买家信息：</b>${escapeHtml(prettyValue(buyer))}`,
+    `📮 <b>联系方式：</b><code>${escapeHtml(contact.length ? contact.join(' / ') : '-')}</code>`,
+    `🕒 <b>下单时间：</b>${escapeHtml(createTimeText)}`,
+    `✅ <b>支付时间：</b>${escapeHtml(payTimeText)}`
   ];
 
   if (orderUrl) {
-    lines.push(`<b>订单链接：</b><code>${escapeHtml(orderUrl)}</code>`);
+    lines.push(`🔗 <b>订单链接：</b><code>${escapeHtml(orderUrl)}</code>`);
   }
   return lines.join('\n');
 }

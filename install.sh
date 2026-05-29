@@ -394,7 +394,8 @@ async function sendTelegram(botToken, chatId, text) {
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
   });
   if (!response.ok) {
-    throw new Error(`Telegram API ${response.status}`);
+    const body = await response.text().catch(() => '');
+    throw new Error(`Telegram API ${response.status}: ${body.slice(0, 300)}`);
   }
 }
 
@@ -411,42 +412,121 @@ function md5(text) {
   return crypto.createHash('md5').update(text).digest('hex');
 }
 
+function jsonResponse(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+}
+
+function objectFromSearchParams(params) {
+  const out = {};
+  for (const [key, value] of params.entries()) {
+    if (out[key] === undefined) {
+      out[key] = value;
+    } else if (Array.isArray(out[key])) {
+      out[key].push(value);
+    } else {
+      out[key] = [out[key], value];
+    }
+  }
+  return out;
+}
+
+function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text || !/^[\[{]/.test(text)) return value;
+  try { return JSON.parse(text); } catch { return value; }
+}
+
+function parseBody(rawBody, contentType) {
+  const text = rawBody.trim();
+  if (!text) return {};
+  if (contentType.includes('application/json') || /^[\[{]/.test(text)) {
+    return JSON.parse(text);
+  }
+  if (contentType.includes('application/x-www-form-urlencoded') || text.includes('=')) {
+    const parsed = objectFromSearchParams(new URLSearchParams(text));
+    for (const key of ['data', 'payload', 'content']) {
+      if (parsed[key]) parsed[key] = parseMaybeJson(parsed[key]);
+    }
+    return parsed;
+  }
+  return { raw: rawBody };
+}
+
+function normalizePayload(payload) {
+  for (const key of ['data', 'payload', 'content']) {
+    const value = parseMaybeJson(payload[key]);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { ...value, ...payload, [key]: value };
+    }
+  }
+  return payload;
+}
+
+function canonicalPayload(payload) {
+  return Object.keys(payload)
+    .filter((key) => !['sign', 'signature', 'x-signature', 'sign_type'].includes(key.toLowerCase()))
+    .sort()
+    .map((key) => {
+      const value = payload[key];
+      const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return `${key}=${text}`;
+    })
+    .join('&');
+}
+
+function validSignature(receivedSign, rawBody, payload, secretKey) {
+  if (!receivedSign || !secretKey) return true;
+  const sign = String(receivedSign).trim().toLowerCase();
+  const canonical = canonicalPayload(payload);
+  const candidates = [
+    md5(`${rawBody}${secretKey}`),
+    md5(`${secretKey}${rawBody}`),
+    md5(`${JSON.stringify(payload)}${secretKey}`),
+    md5(`${canonical}${secretKey}`),
+    md5(`${secretKey}${canonical}`)
+  ];
+  return candidates.some((item) => item.toLowerCase() === sign);
+}
+
 const settings = parseEnv(readText(settingsPath));
 const secretKey = settings.SECRET_KEY || process.env.SECRET_KEY || '';
+const strictSign = (settings.STRICT_SIGN || process.env.STRICT_SIGN || '').toLowerCase() === 'yes';
+const notifyPaths = new Set(['/webhook/notify', '/notify']);
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({
+    jsonResponse(res, 200, {
       ok: true,
       bots: loadBots().length,
       notifiers: loadNotifiers().length
-    }));
+    });
     return;
   }
 
-    if (req.method === 'POST' && url.pathname === '/webhook/notify') {
+  if (notifyPaths.has(url.pathname) && ['GET', 'POST'].includes(req.method)) {
     try {
       const rawBody = await readBody(req);
-      const payload = rawBody ? JSON.parse(rawBody) : {};
-      const receivedSign = req.headers['x-signature'] || req.headers['sign'];
+      const queryPayload = objectFromSearchParams(url.searchParams);
+      const bodyPayload = parseBody(rawBody, req.headers['content-type'] || '');
+      const payload = normalizePayload({ ...queryPayload, ...bodyPayload });
+      const receivedSign = req.headers['x-signature'] || req.headers['sign'] ||
+        queryPayload.sign || queryPayload.signature || bodyPayload.sign || bodyPayload.signature;
 
-      if (receivedSign && secretKey) {
-        const signatureOk = receivedSign === md5(`${rawBody}${secretKey}`) ||
-          receivedSign === md5(`${JSON.stringify(payload)}${secretKey}`);
-        if (!signatureOk) {
-          res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ msg: 'Invalid Signature' }));
+      if (!validSignature(receivedSign, rawBody, payload, secretKey)) {
+        console.warn('invalid signature from webhook request');
+        if (strictSign) {
+          jsonResponse(res, 401, { msg: 'Invalid Signature' });
           return;
         }
       }
 
       const recipients = enabledRecipients(settings);
       if (!recipients.length) {
-        res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ msg: 'No recipients configured' }));
+        jsonResponse(res, 503, { msg: 'No recipients configured' });
         return;
       }
 
@@ -454,28 +534,32 @@ const server = http.createServer(async (req, res) => {
       const header = buildNotifyHeader(payload);
       let sent = 0;
       let failed = 0;
+      const errors = [];
       await Promise.allSettled(recipients.map(async (item) => {
         await sendTelegram(item.botToken, item.chatId, `${header}\n\n${text}`);
         sent += 1;
       })).then((results) => {
-        for (const result of results) {
-          if (result.status === 'rejected') failed += 1;
-        }
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            failed += 1;
+            const target = `${recipients[index].botName}/${recipients[index].name}`;
+            const message = result.reason && result.reason.message ? result.reason.message : String(result.reason);
+            errors.push(`${target}: ${message}`);
+            console.error(`telegram send failed for ${target}:`, message);
+          }
+        });
       });
 
-      res.writeHead(failed === 0 ? 200 : 207, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ msg: 'OK', sent, failed }));
+      jsonResponse(res, failed === 0 ? 200 : 207, { msg: 'OK', sent, failed, errors });
       return;
     } catch (error) {
       console.error('webhook error:', error);
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ msg: 'Internal Server Error' }));
+      jsonResponse(res, 400, { msg: 'Bad webhook payload', error: error.message });
       return;
     }
   }
 
-  res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ msg: 'Not Found' }));
+  jsonResponse(res, 404, { msg: 'Not Found' });
 });
 
 server.listen(port, () => {
@@ -906,6 +990,7 @@ show_status() {
   printf '通知位数量: %s\n' "${notifiers}"
   printf '容器状态: %s\n' "${container_status}"
   printf 'Webhook: %s/webhook/notify\n' "$(service_base_url)"
+  printf '兼容地址: %s/notify\n' "$(service_base_url)"
   printf '健康检查: %s/health\n' "$(service_base_url)"
 }
 

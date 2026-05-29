@@ -270,6 +270,7 @@ const crypto = require('crypto');
 const dataDir = process.env.TG_NOTIFY_DATA_DIR || '/srv/data';
 const settingsPath = process.env.TG_NOTIFY_SETTINGS_FILE || '/srv/settings.env';
 const port = Number(process.env.PORT || 3000);
+const runtimeVersion = '2026-05-29-form-v2';
 
 function readText(file) {
   try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
@@ -630,7 +631,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`TG Notify running on port ${port}`);
+  console.log(`TG Notify runtime ${runtimeVersion} running on port ${port}`);
 });
 EOF
 
@@ -676,7 +677,7 @@ compose_down() {
 compose_restart() {
     local cmd
     cmd="$(compose_cmd)"
-    (cd "${APP_DIR}" && ${cmd} up -d)
+    (cd "${APP_DIR}" && ${cmd} up -d --force-recreate)
 }
 
 bot_name_by_id() {
@@ -1155,7 +1156,7 @@ do_update() {
         ok "以后可以直接运行：bash ${target_path}"
     fi
     if [[ "${temporary_entry}" == "yes" && "${1:-}" != "--no-exec" ]]; then
-        warn "当前菜单仍是临时旧进程，正在切换到新版脚本。"
+        warn "正在切换到新版脚本。"
         exec bash "${target_path}"
     fi
 }

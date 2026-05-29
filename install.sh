@@ -1075,9 +1075,6 @@ bootstrap_defaults() {
 
 do_install() {
     load_settings
-    if [[ "${1:-}" != "--no-persist" ]]; then
-        ensure_persistent_script || return 1
-    fi
     edit_settings
     bootstrap_defaults
     write_runtime
@@ -1249,7 +1246,7 @@ main_menu() {
         echo "2. 机器人管理"
         echo "3. 通知位管理"
         echo "4. 修改全局配置"
-        echo "5. 更新运行文件1"
+        echo "5. 更新运行文件"
         echo "6. 重启"
         echo "7. 停止"
         echo "8. 查看状态"
@@ -1296,13 +1293,7 @@ EOF
 main() {
     ensure_base
     case "${1:-}" in
-        install)
-            ensure_persistent_script || exit 1
-            if [[ -n "${SCRIPT_RUN_PATH:-}" && "$(get_script_path)" != "${SCRIPT_RUN_PATH}" ]]; then
-                exec bash "${SCRIPT_RUN_PATH}" install --no-persist
-            fi
-            do_install --no-persist
-            ;;
+        install) do_install ;;
         settings|config) edit_settings ;;
         bots) bot_menu ;;
         notifiers) notifier_menu ;;
@@ -1314,14 +1305,7 @@ main() {
         logs) show_logs ;;
         uninstall|remove|purge) do_uninstall ;;
         help|-h|--help) usage ;;
-        "")
-            ensure_persistent_script || exit 1
-            if [[ -n "${SCRIPT_RUN_PATH:-}" && "$(get_script_path)" != "${SCRIPT_RUN_PATH}" ]]; then
-                warn "当前菜单是临时入口，正在切换到本地最新版脚本。"
-                exec bash "${SCRIPT_RUN_PATH}"
-            fi
-            main_menu
-            ;;
+        "") main_menu ;;
         *) usage; exit 1 ;;
     esac
 }

@@ -15,6 +15,7 @@ RUNTIME_FLAG="${BASE_DIR}/.installed"
 DEFAULT_PORT="3000"
 DEFAULT_UPDATE_URL=""
 DEFAULT_INSTALL_URL="https://raw.githubusercontent.com/inimemail/webhooktg/main/install.sh"
+DEFAULT_INSTALL_PATH="${TG_NOTIFY_INSTALL_PATH:-/usr/local/bin/tg-notify}"
 
 red() { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -190,6 +191,72 @@ service_running() {
     local cmd
     cmd="$(compose_cmd)"
     (cd "${APP_DIR}" && ${cmd} ps -q tg-notify 2>/dev/null | grep -q .)
+}
+
+get_script_path() {
+    readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || printf '%s' "$0"
+}
+
+is_temporary_script_path() {
+    local path="$1"
+    case "${path}" in
+        /dev/fd/*|/proc/*/fd/*|/proc/self/fd/*|*'pipe:['*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+download_script_to() {
+    local target_path="$1"
+    local update_url tmp target_dir mode
+
+    [[ -n "${target_path}" ]] || { err "安装路径为空，已取消。"; return 1; }
+    update_url="${INSTALL_URL:-${DEFAULT_INSTALL_URL}}"
+    target_dir="$(dirname "${target_path}")"
+    tmp="$(mktemp)"
+
+    if [[ ! -d "${target_dir}" ]]; then
+        mkdir -p "${target_dir}" 2>/dev/null || {
+            rm -f "${tmp}"
+            err "无法创建目录：${target_dir}"
+            return 1
+        }
+    fi
+
+    if [[ -e "${target_path}" && ! -w "${target_path}" ]]; then
+        rm -f "${tmp}"
+        err "当前用户没有写入权限：${target_path}"
+        warn "请用 root/sudo 运行，或设置 TG_NOTIFY_INSTALL_PATH 到可写路径。"
+        return 1
+    fi
+
+    info "正在下载最新脚本：${update_url}"
+    if ! curl -fsSL "${update_url}" -o "${tmp}"; then
+        rm -f "${tmp}"
+        err "下载失败，请检查网络或更新地址。"
+        return 1
+    fi
+
+    if ! bash -n "${tmp}"; then
+        rm -f "${tmp}"
+        err "下载到的脚本语法检查未通过，已取消更新。"
+        return 1
+    fi
+
+    mode="$(stat -c '%a' "${target_path}" 2>/dev/null || true)"
+    cp "${tmp}" "${target_path}" || {
+        rm -f "${tmp}"
+        err "写入脚本失败：${target_path}"
+        return 1
+    }
+    rm -f "${tmp}"
+
+    if [[ -n "${mode}" ]]; then
+        chmod "${mode}" "${target_path}" 2>/dev/null || true
+    else
+        chmod +x "${target_path}" 2>/dev/null || true
+    fi
 }
 
 write_runtime() {
@@ -1032,54 +1099,38 @@ do_stop() {
 
 do_update() {
     load_settings
-    local tmp_dir backup_dir installer_url
-    installer_url="${INSTALL_URL:-${DEFAULT_INSTALL_URL}}"
-    tmp_dir="$(mktemp -d)"
-    backup_dir="${tmp_dir}/backup"
-    mkdir -p "${backup_dir}"
+    local script_path target_path
 
-    cp -f "${SETTINGS_FILE}" "${backup_dir}/settings.env" 2>/dev/null || true
-    cp -f "${BOTS_DB}" "${backup_dir}/bots.tsv" 2>/dev/null || true
-    cp -f "${NOTIFIERS_DB}" "${backup_dir}/notifiers.tsv" 2>/dev/null || true
-
-    info "正在下载更新脚本: ${installer_url}"
     if ! command -v curl >/dev/null 2>&1; then
         err "系统没有 curl，无法更新。"
-        rm -rf "${tmp_dir}"
         return 1
     fi
 
-    if ! curl -fsSL "${installer_url}" -o "${tmp_dir}/install.sh"; then
-        err "更新脚本下载失败。"
-        rm -rf "${tmp_dir}"
-        return 1
+    script_path="$(get_script_path)"
+    if is_temporary_script_path "${script_path}" || [[ ! -f "${script_path}" ]]; then
+        target_path="${DEFAULT_INSTALL_PATH}"
+        warn "当前脚本是临时执行入口：${script_path}"
+        info "将安装/更新到固定路径：${target_path}"
+    else
+        target_path="${script_path}"
     fi
 
-    if [[ ! -s "${tmp_dir}/install.sh" ]]; then
-        err "下载到的脚本为空。"
-        rm -rf "${tmp_dir}"
-        return 1
-    fi
+    download_script_to "${target_path}" || return 1
+    ok "脚本已更新：${target_path}"
 
-    chmod +x "${tmp_dir}/install.sh" 2>/dev/null || true
-    info "正在执行更新脚本。"
-    if ! bash "${tmp_dir}/install.sh"; then
-        err "远程安装脚本执行失败。"
-        rm -rf "${tmp_dir}"
-        return 1
-    fi
-
-    ensure_base
-    cp -f "${backup_dir}/settings.env" "${SETTINGS_FILE}" 2>/dev/null || true
-    cp -f "${backup_dir}/bots.tsv" "${BOTS_DB}" 2>/dev/null || true
-    cp -f "${backup_dir}/notifiers.tsv" "${NOTIFIERS_DB}" 2>/dev/null || true
-
+    info "正在重新生成运行文件。"
     write_runtime
     if [[ -f "${COMPOSE_FILE}" ]]; then
+        info "正在重启服务。"
         compose_restart
     fi
-    rm -rf "${tmp_dir}"
-    ok "已完成更新，配置已保留。"
+    ok "运行文件已更新，配置已保留。"
+
+    if [[ "${target_path}" != "${script_path}" ]]; then
+        ok "以后可以直接运行：bash ${target_path}"
+        warn "当前菜单仍是临时旧进程，正在切换到新版脚本。"
+        exec bash "${target_path}"
+    fi
 }
 
 show_logs() {

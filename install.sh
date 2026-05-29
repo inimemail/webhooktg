@@ -1097,6 +1097,17 @@ do_stop() {
     ok "已停止。"
 }
 
+refresh_runtime() {
+    load_settings
+    info "正在重新生成运行文件。"
+    write_runtime
+    if [[ -f "${COMPOSE_FILE}" ]]; then
+        info "正在重启服务。"
+        compose_restart
+    fi
+    ok "运行文件已更新，配置已保留。"
+}
+
 do_update() {
     load_settings
     local script_path target_path
@@ -1118,18 +1129,14 @@ do_update() {
     download_script_to "${target_path}" || return 1
     ok "脚本已更新：${target_path}"
 
-    info "正在重新生成运行文件。"
-    write_runtime
-    if [[ -f "${COMPOSE_FILE}" ]]; then
-        info "正在重启服务。"
-        compose_restart
+    info "正在使用新版脚本重新生成运行文件。"
+    if ! bash "${target_path}" refresh; then
+        err "新版脚本重新生成运行文件失败。"
+        return 1
     fi
-    ok "运行文件已更新，配置已保留。"
 
     if [[ "${target_path}" != "${script_path}" ]]; then
         ok "以后可以直接运行：bash ${target_path}"
-        warn "当前菜单仍是临时旧进程，正在切换到新版脚本。"
-        exec bash "${target_path}"
     fi
 }
 
@@ -1219,7 +1226,7 @@ main_menu() {
         echo "2. 机器人管理"
         echo "3. 通知位管理"
         echo "4. 修改全局配置"
-        echo "5. 更新运行文件"
+        echo "5. 重新生成运行文件"
         echo "6. 重启"
         echo "7. 停止"
         echo "8. 查看状态"
@@ -1233,7 +1240,7 @@ main_menu() {
             2) bot_menu ;;
             3) notifier_menu ;;
             4) edit_settings; pause_enter ;;
-            5) do_update; pause_enter ;;
+            5) refresh_runtime; pause_enter ;;
             6) do_restart; pause_enter ;;
             7) do_stop; pause_enter ;;
             8) show_status; pause_enter ;;
@@ -1253,6 +1260,7 @@ usage() {
   bash tg-notify.sh settings
   bash tg-notify.sh bots
   bash tg-notify.sh notifiers
+  bash tg-notify.sh refresh
   bash tg-notify.sh update
   bash tg-notify.sh restart
   bash tg-notify.sh stop
@@ -1269,6 +1277,7 @@ main() {
         settings|config) edit_settings ;;
         bots) bot_menu ;;
         notifiers) notifier_menu ;;
+        refresh|runtime) refresh_runtime ;;
         update) do_update ;;
         restart) do_restart ;;
         stop) do_stop ;;

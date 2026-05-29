@@ -339,13 +339,32 @@ function formatAmount(value) {
   if (value === undefined || value === null || String(value).trim() === '') return '-';
   const num = Number(value);
   if (Number.isFinite(num)) {
-    return num.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+    return `￥${num.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')}`;
   }
   return String(value);
 }
 
+function formatTimeValue(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return '-';
+  const text = String(value).trim();
+  if (/^[0-9]{10,13}$/.test(text)) {
+    const millis = text.length === 13 ? Number(text) : Number(text) * 1000;
+    const date = new Date(millis);
+    if (!Number.isNaN(date.getTime())) {
+      const pad = (item) => String(item).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+  }
+  return text;
+}
+
 function pickOrderId(payload) {
-  return firstValue(payload, ['order_no', 'order_sn', 'trade_no', 'out_trade_no', 'order_id', 'id']);
+  return firstValue(payload, [
+    'order_no', 'order_sn', 'trade_no', 'out_trade_no', 'order_id',
+    'order.order_no', 'order.order_sn', 'order.trade_no', 'order.out_trade_no', 'order.id',
+    'data.order_no', 'data.order_sn', 'data.trade_no', 'data.out_trade_no', 'data.order_id',
+    'id'
+  ]);
 }
 
 function loadBots() {
@@ -400,30 +419,50 @@ function enabledRecipients(settings) {
 }
 
 function buildMessage(payload) {
-  const siteName = firstValue(payload, ['site_name', 'shop_name', 'app_name', 'system_name']) || '异次元发卡';
-  const productName = firstValue(payload, ['product_name', 'goods_name', 'product_title', 'title', 'name', 'item_name']) || '商品购买通知';
-  const orderNo = firstValue(payload, ['order_no', 'order_sn', 'trade_no', 'out_trade_no', 'order_id', 'id']);
-  const status = firstValue(payload, ['pay_status', 'order_status', 'status', 'state']) || '已触发';
-  const amount = firstValue(payload, ['pay_amount', 'total_amount', 'money', 'amount', 'price', 'total']);
-  const payType = firstValue(payload, ['payment_method', 'pay_type', 'channel', 'payment', 'pay_channel']);
-  const buyer = firstValue(payload, ['buyer', 'username', 'nickname', 'user_name', 'buyer_name', 'account']);
+  const productName = firstValue(payload, [
+    'product_name', 'goods_name', 'product_title', 'title', 'item_name',
+    'commodity.name', 'goods.name', 'product.name', 'order.commodity.name', 'order.goods.name', 'order.commodity_name', 'order.goods_name',
+    'name'
+  ]) || '商品购买通知';
+  const orderNo = pickOrderId(payload);
+  const status = firstValue(payload, [
+    'pay_status_text', 'order_status_text', 'status_text',
+    'pay_status', 'order_status', 'status', 'state',
+    'order.pay_status_text', 'order.status_text', 'order.pay_status', 'order.status'
+  ]) || '已触发';
+  const amount = firstValue(payload, [
+    'pay_amount', 'total_amount', 'actual_amount', 'money', 'amount', 'total',
+    'order.pay_amount', 'order.total_amount', 'order.actual_amount', 'order.money', 'order.amount', 'order.total', 'order.price',
+    'commodity.user_price', 'commodity.price'
+  ]);
+  const payType = firstValue(payload, [
+    'payment_method', 'pay_type_name', 'pay_type_text', 'pay_name', 'channel_name', 'channel', 'payment', 'pay_channel',
+    'order.payment_method', 'order.pay_type_name', 'order.pay_type_text', 'order.pay_name', 'order.pay.name', 'order.pay.title', 'order.channel_name', 'order.channel', 'order.pay_channel',
+    'pay.name', 'pay.title', 'payment.name'
+  ]);
+  const buyer = firstValue(payload, [
+    'buyer', 'username', 'nickname', 'user_name', 'buyer_name', 'account',
+    'user.username', 'user.nickname', 'user.email', 'order.username', 'order.account', 'order.user.username', 'order.user.email'
+  ]);
   const contact = [
-    firstValue(payload, ['email']),
-    firstValue(payload, ['phone']),
-    firstValue(payload, ['mobile']),
-    firstValue(payload, ['qq'])
+    firstValue(payload, ['contact', 'contact_value', 'contact_account', 'order.contact', 'order.contact_value', 'order.contact_account']),
+    firstValue(payload, ['email', 'user.email', 'order.email', 'order.user.email', 'contact.email']),
+    firstValue(payload, ['phone', 'mobile', 'user.phone', 'user.mobile', 'order.phone', 'order.mobile', 'contact.phone']),
+    firstValue(payload, ['qq', 'user.qq', 'order.qq', 'contact.qq'])
   ].filter((item) => item && String(item).trim() !== '');
-  const createTime = firstValue(payload, ['create_time', 'created_at', 'order_time', 'add_time', 'time']);
-  const payTime = firstValue(payload, ['pay_time', 'paid_at', 'notify_time', 'success_time']);
+  const createTime = firstValue(payload, [
+    'create_time', 'created_at', 'order_time', 'add_time', 'create_at', 'time',
+    'order.create_time', 'order.created_at', 'order.order_time', 'order.add_time', 'order.create_at'
+  ]);
+  const payTime = firstValue(payload, ['pay_time', 'paid_at', 'notify_time', 'success_time', 'payment_time', 'order.pay_time', 'order.paid_at', 'order.success_time', 'order.payment_time']);
   const notifyType = firstValue(payload, ['event_type', 'type', 'event']) || '商品购买';
-  const note = firstValue(payload, ['remark', 'memo', 'note', 'message']);
-  const orderUrl = firstValue(payload, ['order_url', 'url', 'detail_url']);
+  const orderUrl = firstValue(payload, ['order_url', 'url', 'detail_url', 'order.url', 'order.detail_url']);
   const amountText = formatAmount(amount);
-  const rawJson = JSON.stringify(payload, null, 2);
-  const rawBlock = rawJson.length > 1200 ? `${rawJson.slice(0, 1200)}\n...` : rawJson;
+  const createTimeText = formatTimeValue(createTime);
+  const payTimeText = formatTimeValue(payTime);
 
   const lines = [
-    `<b>${escapeHtml(siteName)} · ${escapeHtml(productName)}</b>`,
+    `<b>${escapeHtml(productName)}</b>`,
     `<b>通知类型：</b>${escapeHtml(notifyType)}`,
     `<b>订单状态：</b>${escapeHtml(status)}`,
     `<b>订单编号：</b><code>${escapeHtml(orderNo || '-')}</code>`,
@@ -431,28 +470,20 @@ function buildMessage(payload) {
     `<b>支付方式：</b>${escapeHtml(payType || '-')}`,
     `<b>买家信息：</b>${escapeHtml(prettyValue(buyer))}`,
     `<b>联系方式：</b>${escapeHtml(contact.length ? contact.join(' / ') : '-')}`,
-    `<b>下单时间：</b>${escapeHtml(prettyValue(createTime))}`,
-    `<b>支付时间：</b>${escapeHtml(prettyValue(payTime))}`
+    `<b>下单时间：</b>${escapeHtml(createTimeText)}`,
+    `<b>支付时间：</b>${escapeHtml(payTimeText)}`
   ];
 
   if (orderUrl) {
     lines.push(`<b>订单链接：</b><code>${escapeHtml(orderUrl)}</code>`);
   }
-  if (note) {
-    lines.push(`<b>备注：</b>${escapeHtml(note)}`);
-  }
-
-  lines.push('');
-  lines.push('<b>原始数据</b>');
-  lines.push(`<pre>${escapeHtml(rawBlock)}</pre>`);
   return lines.join('\n');
 }
 
 function buildNotifyHeader(payload) {
-  const siteName = firstValue(payload, ['site_name', 'shop_name', 'app_name', 'system_name']) || '异次元发卡';
-  const productName = firstValue(payload, ['product_name', 'goods_name', 'product_title', 'title', 'name', 'item_name']) || '商品购买通知';
+  const productName = firstValue(payload, ['product_name', 'goods_name', 'product_title', 'title', 'item_name', 'commodity.name', 'goods.name', 'product.name', 'name']) || '商品购买通知';
   const orderId = pickOrderId(payload);
-  return orderId ? `${siteName} · ${productName} · 订单 ${orderId}` : `${siteName} · ${productName}`;
+  return orderId ? `${productName} · 订单 ${orderId}` : productName;
 }
 
 async function sendTelegram(botToken, chatId, text) {
@@ -599,12 +630,11 @@ const server = http.createServer(async (req, res) => {
       }
 
       const text = buildMessage(payload);
-      const header = buildNotifyHeader(payload);
       let sent = 0;
       let failed = 0;
       const errors = [];
       await Promise.allSettled(recipients.map(async (item) => {
-        await sendTelegram(item.botToken, item.chatId, `${header}\n\n${text}`);
+        await sendTelegram(item.botToken, item.chatId, text);
         sent += 1;
       })).then((results) => {
         results.forEach((result, index) => {

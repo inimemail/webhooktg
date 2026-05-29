@@ -1075,6 +1075,9 @@ bootstrap_defaults() {
 
 do_install() {
     load_settings
+    if [[ "${1:-}" != "--no-persist" ]]; then
+        ensure_persistent_script || return 1
+    fi
     edit_settings
     bootstrap_defaults
     write_runtime
@@ -1108,9 +1111,23 @@ refresh_runtime() {
     ok "运行文件已更新，配置已保留。"
 }
 
+ensure_persistent_script() {
+    local script_path
+
+    SCRIPT_RUN_PATH=""
+    script_path="$(get_script_path)"
+    if is_temporary_script_path "${script_path}" || [[ ! -f "${script_path}" ]]; then
+        warn "当前是临时执行入口，正在安装脚本到固定路径：${DEFAULT_INSTALL_PATH}"
+        download_script_to "${DEFAULT_INSTALL_PATH}" || return 1
+        SCRIPT_RUN_PATH="${DEFAULT_INSTALL_PATH}"
+    else
+        SCRIPT_RUN_PATH="${script_path}"
+    fi
+}
+
 do_update() {
     load_settings
-    local script_path target_path
+    local script_path target_path temporary_entry
 
     if ! command -v curl >/dev/null 2>&1; then
         err "系统没有 curl，无法更新。"
@@ -1119,10 +1136,12 @@ do_update() {
 
     script_path="$(get_script_path)"
     if is_temporary_script_path "${script_path}" || [[ ! -f "${script_path}" ]]; then
+        temporary_entry="yes"
         target_path="${DEFAULT_INSTALL_PATH}"
         warn "当前脚本是临时执行入口：${script_path}"
         info "将安装/更新到固定路径：${target_path}"
     else
+        temporary_entry="no"
         target_path="${script_path}"
     fi
 
@@ -1137,6 +1156,10 @@ do_update() {
 
     if [[ "${target_path}" != "${script_path}" ]]; then
         ok "以后可以直接运行：bash ${target_path}"
+    fi
+    if [[ "${temporary_entry}" == "yes" && "${1:-}" != "--no-exec" ]]; then
+        warn "当前菜单仍是临时旧进程，正在切换到新版脚本。"
+        exec bash "${target_path}"
     fi
 }
 
@@ -1226,7 +1249,7 @@ main_menu() {
         echo "2. 机器人管理"
         echo "3. 通知位管理"
         echo "4. 修改全局配置"
-        echo "5. 更新运行文件"
+        echo "5. 更新运行文件1"
         echo "6. 重启"
         echo "7. 停止"
         echo "8. 查看状态"
@@ -1240,7 +1263,7 @@ main_menu() {
             2) bot_menu ;;
             3) notifier_menu ;;
             4) edit_settings; pause_enter ;;
-            5) refresh_runtime; pause_enter ;;
+            5) do_update; pause_enter ;;
             6) do_restart; pause_enter ;;
             7) do_stop; pause_enter ;;
             8) show_status; pause_enter ;;
@@ -1273,7 +1296,13 @@ EOF
 main() {
     ensure_base
     case "${1:-}" in
-        install) do_install ;;
+        install)
+            ensure_persistent_script || exit 1
+            if [[ -n "${SCRIPT_RUN_PATH:-}" && "$(get_script_path)" != "${SCRIPT_RUN_PATH}" ]]; then
+                exec bash "${SCRIPT_RUN_PATH}" install --no-persist
+            fi
+            do_install --no-persist
+            ;;
         settings|config) edit_settings ;;
         bots) bot_menu ;;
         notifiers) notifier_menu ;;
@@ -1285,7 +1314,14 @@ main() {
         logs) show_logs ;;
         uninstall|remove|purge) do_uninstall ;;
         help|-h|--help) usage ;;
-        "") main_menu ;;
+        "")
+            ensure_persistent_script || exit 1
+            if [[ -n "${SCRIPT_RUN_PATH:-}" && "$(get_script_path)" != "${SCRIPT_RUN_PATH}" ]]; then
+                warn "当前菜单是临时入口，正在切换到本地最新版脚本。"
+                exec bash "${SCRIPT_RUN_PATH}"
+            fi
+            main_menu
+            ;;
         *) usage; exit 1 ;;
     esac
 }
